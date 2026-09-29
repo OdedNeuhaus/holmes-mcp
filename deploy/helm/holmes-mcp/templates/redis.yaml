@@ -1,0 +1,116 @@
+{{- if .Values.redis.enabled }}
+{{- if not .Values.redis.existingSecret }}
+{{- /* Reuse the generated password on upgrades instead of rotating it. */}}
+{{- $secretName := include "holmes-mcp.redis.secretName" . }}
+{{- $existing := lookup "v1" "Secret" .Release.Namespace $secretName }}
+{{- $password := randAlphaNum 32 }}
+{{- if and $existing $existing.data (hasKey $existing.data "password") }}
+{{- $password = index $existing.data "password" | b64dec }}
+{{- end }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $secretName }}
+  labels:
+    {{- include "holmes-mcp.labels" . | nindent 4 }}
+type: Opaque
+data:
+  password: {{ $password | b64enc | quote }}
+---
+{{- end }}
+# Conversations are short-lived and losing them only means users start over
+# with ask_holmes, so this Redis runs without persistence.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "holmes-mcp.redis.fullname" . }}
+  labels:
+    {{- include "holmes-mcp.labels" . | nindent 4 }}
+    {{- include "holmes-mcp.redis.selectorLabels" . | nindent 4 }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "holmes-mcp.redis.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "holmes-mcp.labels" . | nindent 8 }}
+        {{- include "holmes-mcp.redis.selectorLabels" . | nindent 8 }}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        fsGroup: 999
+      containers:
+        - name: redis
+          image: {{ .Values.redis.image }}
+          args:
+            - --requirepass
+            - $(REDIS_PASSWORD)
+            - --save
+            - ""
+            - --appendonly
+            - "no"
+            # Every conversation key has a TTL, so evict the oldest-used
+            # ones first if memory ever runs out.
+            - --maxmemory
+            - {{ .Values.redis.maxMemory | quote }}
+            - --maxmemory-policy
+            - volatile-lru
+          env:
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "holmes-mcp.redis.secretName" . }}
+                  key: password
+          ports:
+            - name: redis
+              containerPort: 6379
+          readinessProbe:
+            tcpSocket:
+              port: redis
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: redis
+            periodSeconds: 20
+          resources:
+            {{- toYaml .Values.redis.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          emptyDir: {}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "holmes-mcp.redis.fullname" . }}
+  labels:
+    {{- include "holmes-mcp.labels" . | nindent 4 }}
+    {{- include "holmes-mcp.redis.selectorLabels" . | nindent 4 }}
+spec:
+  selector:
+    {{- include "holmes-mcp.redis.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: redis
+      port: 6379
+      targetPort: redis
+{{- end }}

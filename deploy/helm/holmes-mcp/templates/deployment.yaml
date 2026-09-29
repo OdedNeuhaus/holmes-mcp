@@ -1,0 +1,122 @@
+{{- if and (gt (int .Values.replicaCount) 1) (not (include "holmes-mcp.redis.configured" .)) }}
+{{- fail "replicaCount > 1 needs a shared conversation store: set redis.enabled=true or redis.external.existingSecret" }}
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "holmes-mcp.fullname" . }}
+  labels:
+    {{- include "holmes-mcp.labels" . | nindent 4 }}
+    {{- include "holmes-mcp.selectorLabels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "holmes-mcp.selectorLabels" . | nindent 6 }}
+  strategy:
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        {{- include "holmes-mcp.labels" . | nindent 8 }}
+        {{- include "holmes-mcp.selectorLabels" . | nindent 8 }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      # On rollout or scale-down, in-flight investigations are allowed to
+      # finish: the server drains them for up to the total timeout, and the
+      # pod exits as soon as they are done (an idle pod stops in seconds).
+      terminationGracePeriodSeconds: {{ add (int .Values.holmes.totalTimeoutSeconds) 60 }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+      # Spread replicas across nodes when possible.
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              {{- include "holmes-mcp.selectorLabels" . | nindent 14 }}
+      containers:
+        - name: holmes-mcp
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8000
+          lifecycle:
+            preStop:
+              # Keep accepting requests while the endpoint removal reaches
+              # kube-proxy and the ingress, so no new call hits a closed port.
+              exec:
+                command: ["sleep", "10"]
+          env:
+            - name: HOLMESGPT_URL
+              value: {{ .Values.holmes.url | quote }}
+            - name: GENERIC_MODEL_NAME
+              value: {{ .Values.holmes.model | quote }}
+            {{- with .Values.holmes.additionalSystemPrompt }}
+            - name: ADDITIONAL_SYSTEM_PROMPT
+              value: {{ . | quote }}
+            {{- end }}
+            - name: STALL_TIMEOUT_SECONDS
+              value: {{ .Values.holmes.stallTimeoutSeconds | quote }}
+            - name: TOTAL_TIMEOUT_SECONDS
+              value: {{ .Values.holmes.totalTimeoutSeconds | quote }}
+            - name: CONVERSATION_TTL_SECONDS
+              value: {{ .Values.conversationTtlSeconds | quote }}
+            - name: LOG_LEVEL
+              value: {{ .Values.logLevel | quote }}
+            {{- if .Values.redis.enabled }}
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "holmes-mcp.redis.secretName" . }}
+                  key: password
+            - name: REDIS_URL
+              value: "redis://:$(REDIS_PASSWORD)@{{ include "holmes-mcp.redis.fullname" . }}:6379/0"
+            {{- else if .Values.redis.external.existingSecret }}
+            - name: REDIS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.redis.external.existingSecret }}
+                  key: {{ .Values.redis.external.key }}
+            {{- end }}
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          # Both probes use /healthz on purpose. /readyz also checks Redis,
+          # but gating readiness on it would pull every replica out of the
+          # Service during a Redis blip, even though new questions still work
+          # without Redis (only follow-ups need it). Use /readyz for alerting.
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 20
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

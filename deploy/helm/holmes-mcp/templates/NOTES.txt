@@ -1,0 +1,30 @@
+holmes-mcp is deployed: {{ .Values.replicaCount }} replica(s), HolmesGPT at {{ .Values.holmes.url }}
+{{- if .Values.redis.enabled }}, conversations in the bundled Redis.
+{{- else if .Values.redis.external.existingSecret }}, conversations in external Redis (secret {{ .Values.redis.external.existingSecret }}).
+{{- else }}, conversations IN MEMORY (single replica only).
+{{- end }}
+
+{{- if .Values.ingress.enabled }}
+{{- $scheme := ternary "https" "http" .Values.ingress.tls.enabled }}
+
+Claude Code users connect with:
+
+  claude mcp add --transport http --scope user holmesgpt \
+    {{ $scheme }}://{{ .Values.ingress.host }}/mcp \
+    --header "X-User-Email: you@example.com"
+
+Check it:
+
+  curl {{ $scheme }}://{{ .Values.ingress.host }}/healthz
+  curl {{ $scheme }}://{{ .Values.ingress.host }}/readyz   # also checks Redis
+{{- else }}
+
+Ingress is disabled. To try it locally:
+
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "holmes-mcp.fullname" . }} 8000:{{ .Values.service.port }}
+  claude mcp add --transport http holmesgpt http://localhost:8000/mcp
+{{- end }}
+
+Long investigations need no client settings: Claude Code moves calls longer
+than 2 minutes to a background task, and the server sends progress updates
+that keep the call from timing out.

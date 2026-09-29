@@ -1,0 +1,86 @@
+# Number of holmes-mcp replicas. More than 1 requires Redis (on by default).
+replicaCount: 2
+
+image:
+  repository: REGISTRY/holmes-mcp
+  # Defaults to the chart appVersion.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+# The HolmesGPT server that questions are sent to.
+holmes:
+  url: http://holmesgpt-holmes
+  model: generic
+  # Extra system prompt for facts HolmesGPT cannot discover by itself, e.g.
+  # "The configured elasticsearch instances are: prod, staging".
+  additionalSystemPrompt: ""
+  # Longest silence allowed from HolmesGPT before a request is aborted.
+  # Must be longer than its slowest single tool call.
+  stallTimeoutSeconds: 120
+  # Ceiling for one whole investigation.
+  totalTimeoutSeconds: 1800
+
+# How long an idle conversation stays available for follow-ups.
+conversationTtlSeconds: 7200
+
+logLevel: INFO
+
+service:
+  type: ClusterIP
+  port: 80
+
+ingress:
+  enabled: true
+  className: nginx
+  # Keep this host internal: the server has no per-user authentication.
+  host: holmes-mcp.internal.example.com
+  annotations:
+    # Tool calls stay open for the whole investigation.
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "1800"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "1800"
+    # Stream progress notifications (SSE) instead of buffering them.
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+  tls:
+    enabled: false
+    secretName: ""
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    memory: 512Mi
+
+# Conversation store shared by all replicas.
+redis:
+  # true: deploy a small bundled Redis (no persistence; conversations are
+  # short-lived). false: use your own Redis via `external` below.
+  enabled: true
+  image: redis:7-alpine
+  # Keep at ~75% of resources.limits.memory: Redis needs headroom beyond its
+  # data, and hitting the container limit gets it OOMKilled (losing every
+  # conversation) instead of evicting the least recently used ones.
+  maxMemory: 768mb
+  # Secret with key `password`. Empty = the chart generates one.
+  existingSecret: ""
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      memory: 1Gi
+  # Used when enabled: false. A secret whose key holds the full URL,
+  # e.g. redis://:password@my-redis:6379/0
+  external:
+    existingSecret: ""
+    key: redis-url
+
+# Extra environment variables for the holmes-mcp container.
+extraEnv: []
+#  - name: MAX_RESPONSE_CHARS
+#    value: "60000"
+
+nodeSelector: {}
+tolerations: []
