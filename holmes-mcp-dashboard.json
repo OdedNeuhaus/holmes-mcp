@@ -1,0 +1,1724 @@
+{
+  "title": "HolmesGPT MCP — Usage",
+  "uid": "holmes-mcp-usage",
+  "description": "Usage of the HolmesGPT MCP server from Claude Code, read from Langfuse's ClickHouse.",
+  "tags": [
+    "holmesgpt",
+    "mcp",
+    "langfuse",
+    "claude-code"
+  ],
+  "editable": true,
+  "graphTooltip": 1,
+  "time": {
+    "from": "now-7d",
+    "to": "now"
+  },
+  "timepicker": {
+    "refresh_intervals": [
+      "1m",
+      "5m",
+      "15m",
+      "1h"
+    ]
+  },
+  "refresh": "5m",
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "fiscalYearStartMonth": 0,
+  "liveNow": false,
+  "weekStart": "",
+  "links": [
+    {
+      "title": "Langfuse sessions",
+      "type": "link",
+      "icon": "external link",
+      "targetBlank": true,
+      "url": "${langfuse_url}/project/${project_id}/sessions",
+      "tooltip": "All HolmesGPT conversations"
+    },
+    {
+      "title": "Langfuse users",
+      "type": "link",
+      "icon": "external link",
+      "targetBlank": true,
+      "url": "${langfuse_url}/project/${project_id}/users",
+      "tooltip": "Everyone who used it"
+    }
+  ],
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "templating": {
+    "list": [
+      {
+        "type": "datasource",
+        "name": "datasource",
+        "label": "ClickHouse",
+        "query": "grafana-clickhouse-datasource",
+        "current": {},
+        "hide": 0,
+        "refresh": 1,
+        "regex": "",
+        "options": []
+      },
+      {
+        "type": "query",
+        "name": "project_id",
+        "label": "Langfuse project",
+        "datasource": {
+          "type": "grafana-clickhouse-datasource",
+          "uid": "${datasource}"
+        },
+        "description": "The Langfuse project holmes-mcp sends traces to (its id is in the Langfuse URL).",
+        "query": {
+          "rawSql": "SELECT DISTINCT project_id FROM default.traces WHERE has(tags, 'holmes-mcp') AND timestamp > now() - INTERVAL 90 DAY ORDER BY project_id",
+          "editorType": "sql",
+          "format": 1,
+          "queryType": "table",
+          "refId": "project_id"
+        },
+        "definition": "SELECT DISTINCT project_id FROM default.traces WHERE has(tags, 'holmes-mcp') ...",
+        "refresh": 1,
+        "current": {},
+        "hide": 0,
+        "includeAll": false,
+        "multi": false,
+        "options": [],
+        "sort": 1
+      },
+      {
+        "type": "query",
+        "name": "user",
+        "label": "User",
+        "datasource": {
+          "type": "grafana-clickhouse-datasource",
+          "uid": "${datasource}"
+        },
+        "query": {
+          "rawSql": "SELECT DISTINCT ifNull(user_id, 'unknown') FROM default.traces WHERE project_id = '${project_id}' AND has(tags, 'holmes-mcp') AND $__timeFilter(timestamp) ORDER BY 1",
+          "editorType": "sql",
+          "format": 1,
+          "queryType": "table",
+          "refId": "user"
+        },
+        "definition": "SELECT DISTINCT user_id FROM default.traces WHERE project_id = '${project_id}' ...",
+        "refresh": 2,
+        "current": {
+          "selected": true,
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "hide": 0,
+        "includeAll": true,
+        "allValue": "'__all'",
+        "multi": true,
+        "options": [],
+        "sort": 1
+      },
+      {
+        "type": "textbox",
+        "name": "langfuse_url",
+        "label": "Langfuse URL",
+        "description": "Base URL of your Langfuse, used for the links to sessions, traces and users.",
+        "query": "https://langfuse.internal.example.com",
+        "current": {
+          "text": "https://langfuse.internal.example.com",
+          "value": "https://langfuse.internal.example.com"
+        },
+        "hide": 0,
+        "options": []
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "stat",
+      "id": 1,
+      "title": "Investigations",
+      "description": "New HolmesGPT investigations (ask_holmes calls) in the selected time range.",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 4,
+        "h": 5
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "${datasource}"
+          },
+          "editorType": "sql",
+          "format": 0,
+          "queryType": "timeseries",
+          "rawSql": "WITH\ncalls AS (\n    SELECT\n        t.id AS trace_id,\n        t.timestamp AS ts,\n        t.name AS kind,\n        ifNull(t.user_id, 'unknown') AS user,\n        ifNull(t.session_id, '') AS session_id,\n        trim(BOTH '\"' FROM t.metadata['hostname']) AS host\n    FROM default.traces AS t FINAL\n    WHERE t.project_id = '${project_id}'\n      AND has(t.tags, 'holmes-mcp')\n      AND t.is_deleted = 0\n      AND $__timeFilter(t.timestamp)\n      AND ('__all' IN (${user:singlequote}) OR ifNull(t.user_id, 'unknown') IN (${user:singlequote}))\n)\nSELECT $__timeInterval(ts) AS time, countIf(kind = 'ask_holmes') AS Investigations\nFROM calls GROUP BY time ORDER BY time",
+          "refId": "A"
+        }
+      ],
+      "maxDataPoints": 40,
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#3987e5"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "sum"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "none",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "textMode": "value",
+        "wideLayout": true,
+        "showPercentChange": false,
+        "orientation": "auto"
+      }
+    },
+    {
+      "type": "stat",
+      "id": 2,
+      "title": "Follow-ups",
+      "description": "Follow-up questions (holmes_follow_up calls) in the selected time range.",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 4,
+        "y": 0,
+        "w": 4,
+        "h": 5
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "${datasource}"
+          },
+          "editorType": "sql",
+          "format": 0,
+          "queryType": "timeseries",
+          "rawSql": "WITH\ncalls AS (\n    SELECT\n        t.id AS trace_id,\n        t.timestamp AS ts,\n        t.name AS kind,\n        ifNull(t.user_id, 'unknown') AS user,\n        ifNull(t.session_id, '') AS session_id,\n        trim(BOTH '\"' FROM t.metadata['hostname']) AS host\n    FROM default.traces AS t FINAL\n    WHERE t.project_id = '${project_id}'\n      AND has(t.tags, 'holmes-mcp')\n      AND t.is_deleted = 0\n      AND $__timeFilter(t.timestamp)\n      AND ('__all' IN (${user:singlequote}) OR ifNull(t.user_id, 'unknown') IN (${user:singlequote}))\n)\nSELECT $__timeInterval(ts) AS time, countIf(kind = 'holmes_follow_up') AS \"Follow-ups\"\nFROM calls GROUP BY time ORDER BY time",
+          "refId": "A"
+        }
+      ],
+      "maxDataPoints": 40,
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#d95926"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "sum"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "none",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "textMode": "value",
+        "wideLayout": true,
+        "showPercentChange": false,
+        "orientation": "auto"
+      }
+    },
+    {
+      "type": "stat",
+      "id": 3,
+      "title": "Active users",
+      "description": "Distinct identified users (callers without identity headers are not counted).",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 8,
+        "y": 0,
+        "w": 4,
+        "h": 5
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "${datasource}"
+          },
+          "editorType": "sql",
+          "format": 1,
+          "queryType": "table",
+          "rawSql": "WITH\ncalls AS (\n    SELECT\n        t.id AS trace_id,\n        t.timestamp AS ts,\n        t.name AS kind,\n        ifNull(t.user_id, 'unknown') AS user,\n        ifNull(t.session_id, '') AS session_id,\n        trim(BOTH '\"' FROM t.metadata['hostname']) AS host\n    FROM default.traces AS t FINAL\n    WHERE t.project_id = '${project_id}'\n      AND has(t.tags, 'holmes-mcp')\n      AND t.is_deleted = 0\n      AND $__timeFilter(t.timestamp)\n      AND ('__all' IN (${user:singlequote}) OR ifNull(t.user_id, 'unknown') IN (${user:singlequote}))\n)\nSELECT uniqExactIf(user, user != 'unknown') AS \"Active users\" FROM calls",
+          "refId": "A"
+        }
+      ],
+      "maxDataPoints": 40,
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "text"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "none",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "textMode": "value",
+        "wideLayout": true,
+        "showPercentChange": false,
+        "orientation": "auto"
+      }
+    },
+    {
+      "type": "stat",
+      "id": 4,
+      "title": "Success rate",
+      "description": "Share of calls where HolmesGPT returned a complete answer (not an error, cut off or cancelled).",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 4,
+        "h": 5
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "${datasource}"
+          },
+          "editorType": "sql",
+          "format": 1,
+          "queryType": "table",
+          "rawSql": "WITH\ncalls AS (\n    SELECT\n        t.id AS trace_id,\n        t.timestamp AS ts,\n        t.name AS kind,\n        ifNull(t.user_id, 'unknown') AS user,\n        ifNull(t.session_id, '') AS session_id,\n        trim(BOTH '\"' FROM t.metadata['hostname']) AS host\n    FROM default.traces AS t FINAL\n    WHERE t.project_id = '${project_id}'\n      AND has(t.tags, 'holmes-mcp')\n      AND t.is_deleted = 0\n      AND $__timeFilter(t.timestamp)\n      AND ('__all' IN (${user:singlequote}) OR ifNull(t.user_id, 'unknown') IN (${user:singlequote}))\n),\nroots AS (\n    SELECT\n        o.trace_id,\n        o.level,\n        ifNull(o.status_message, '') AS status_message,\n        if(o.end_time IS NULL, NULL, dateDiff('millisecond', o.start_time, o.end_time) / 1000) AS duration_s,\n        JSONExtractString(ifNull(o.input, ''), 'question') AS question\n    FROM default.observations AS o FINAL\n    WHERE o.project_id = '${project_id}'\n      AND upper(o.type) = 'AGENT'\n      AND o.is_deleted = 0\n      AND o.start_time >= $__fromTime - INTERVAL 1 DAY\n      AND o.trace_id IN (SELECT trace_id FROM calls)\n)\nSELECT countIf(r.level NOT IN ('ERROR', 'WARNING', '')) / nullIf(countIf(r.level != ''), 0) AS \"Success rate\"\nFROM calls AS c LEFT JOIN roots AS r ON r.trace_id = c.trace_id",
+          "refId": "A"
+        }
+      ],
+      "maxDataPoints": 40,
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#d03b3b",
+                "value": null
+              },
+              {
+                "color": "#fab219",
+                "value": 0.8
+              },
+              {
+                "color": "#0ca30c",
+                "value": 0.95
+              }
+            ]
+          },
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "textMode": "value",
+        "wideLayout": true,
+        "showPercentChange": false,
+        "orientation": "auto"
+      }
+    },
+    {
+      "type": "stat",
+      "id": 5,
+      "title": "Median answer time",
+      "description": "Median time HolmesGPT took to answer (successful calls).",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 16,
+        "y": 0,
+        "w": 4,
+        "h": 5
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "${datasource}"
+          },
+          "editorType": "sql",
+          "format": 1,
+          "queryType": "table",
+          "rawSql": "WITH\ncalls AS (\n    SELECT\n        t.id AS trace_id,\n        t.timestamp AS ts,\n        t.name AS kind,\n        ifNull(t.user_id, 'unknown') AS user,\n        ifNull(t.session_id, '') AS session_id,\n        trim(BOTH '\"' FROM t.metadata['hostname']) AS host\n    FROM default.traces AS t FINAL\n    WHERE t.project_id = '${project_id}'\n      AND has(t.tags, 'holmes-mcp')\n      AND t.is_deleted = 0\n      AND $__timeFilter(t.timestamp)\n      AND ('__all' IN (${user:singlequote}) OR ifNull(t.user_id, 'unknown') IN (${user:singlequote}))\n),\nroots AS (\n    SELECT\n        o.trace_id,\n        o.level,\n        ifNull(o.status_message, '') AS status_message,\n        if(o.end_time IS NULL, NULL, dateDiff('millisecond', o.start_time, o.end_time) / 1000) AS duration_s,\n        JSONExtractString(ifNull(o.input, ''), 'question') AS question\n    FROM default.observations AS o FINAL\n    WHERE o.project_id = '${project_id}'\n      AND upper(o.type) = 'AGENT'\n      AND o.is_deleted = 0\n      AND o.start_time >= $__fromTime - INTERVAL 1 DAY\n      AND o.trace_id IN (SELECT trace_id FROM calls)\n)\nSELECT quantileExactIf(0.5)(r.duration_s, r.level NOT IN ('ERROR', 'WARNING', '')) AS \"Median answer time\"\nFROM calls AS c INNER JOIN roots AS r ON r.trace_id = c.trace_id",
+          "refId": "A"
+        }
+      ],
+      "maxDataPoints": 40,
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "text"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          },
+          "decimals": 1
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "none",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "textMode": "value",
+        "wideLayout": true,
+        "showPercentChange": false,
+        "orientation": "auto"
+      }
+    },
+    {
+      "type": "stat",
+      "id": 6,
+      "title": "Last used",
+      "description": "Time since the most recent HolmesGPT MCP call.",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 20,
+        "y": 0,
+        "w": 4,
+        "h": 5
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "${datasource}"
+          },
+          "editorType": "sql",
+          "format": 1,
+          "queryType": "table",
+          "rawSql": "WITH\ncalls AS (\n    SELECT\n        t.id AS trace_id,\n        t.timestamp AS ts,\n        t.name AS kind,\n        ifNull(t.user_id, 'unknown') AS user,\n        ifNull(t.session_id, '') AS session_id,\n        trim(BOTH '\"' FROM t.metadata['hostname']) AS host\n    FROM default.traces AS t FINAL\n    WHERE t.project_id = '${project_id}'\n      AND has(t.tags, 'holmes-mcp')\n      AND t.is_deleted = 0\n      AND $__timeFilter(t.timestamp)\n      AND ('__all' IN (${user:singlequote}) OR ifNull(t.user_id, 'unknown') IN (${user:singlequote}))\n)\nSELECT toUnixTimestamp64Milli(max(ts)) AS \"Last used\" FROM calls",
+          "refId": "A"
+        }
+      ],
+      "maxDataPoints": 40,
+      "fieldConfig": {
+        "defaults": {
+          "unit": "dateTimeFromNow",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "text"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "none",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "textMode": "value",
+        "wideLayout": true,
+        "showPercentChange": false,
+        "orientation": "auto"
+      }
+    },
+    {
+      "type": "row",
+      "title": "Usage",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 5,
+        "w": 24,
+        "h": 1
+      },
+      "id": 100,
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "id": 7,
+      "title": "Calls over time",
+      "description": "HolmesGPT MCP calls per time bucket: new investigations and follow-up questions.",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 6,
+        "w": 16,
+        "h": 9
+      },
+      "maxDataPoints": 30,
+      "interval": "1h",
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "${datasource}"
+          },
+          "editorType": "sql",
+          "format": 0,
+          "queryType": "timeseries",
+          "rawSql": "WITH\ncalls AS (\n    SELECT\n        t.id AS trace_id,\n        t.timestamp AS ts,\n        t.name AS kind,\n        ifNull(t.user_id, 'unknown') AS user,\n        ifNull(t.session_id, '') AS session_id,\n        trim(BOTH '\"' FROM t.metadata['hostname']) AS host\n    FROM default.traces AS t FINAL\n    WHERE t.project_id = '${project_id}'\n      AND has(t.tags, 'holmes-mcp')\n      AND t.is_deleted = 0\n      AND $__timeFilter(t.timestamp)\n      AND ('__all' IN (${user:singlequote}) OR ifNull(t.user_id, 'unknown') IN (${user:singlequote}))\n)\nSELECT $__timeInterval(ts) AS time,\n       countIf(kind = 'ask_holmes') AS Investigations,\n       countIf(kind = 'holmes_follow_up') AS \"Follow-ups\"\nFROM calls GROUP BY time ORDER BY time",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "decimals": 0,
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 85,
+            "lineWidth": 0,
+            "barAlignment": 0,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            },
+            "gradientMode": "none",
+            "axisBorderShow": false,
+            "axisPlacement": "auto",
+            "axisSoftMin": 0,
+            "showPoints": "never",
+            "spanNulls": false,
+            "insertNulls": false
+          },
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#3987e5"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Investigations"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#3987e5"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Follow-ups"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#d95926"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "sum"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "piechart",
+      "id": 8,
+      "title": "Outcomes",
+      "description": "How calls ended. Success = complete answer; Cut off = HolmesGPT hit a time limit or stopped early; Cancelled = the user or Claude Code stopped the call; Error = HolmesGPT failed.",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 16,
+        "y": 6,
+        "w": 8,
+        "h": 9
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "${datasource}"
+          },
+          "editorType": "sql",
+          "format": 1,
+          "queryType": "table",
+          "rawSql": "WITH\ncalls AS (\n    SELECT\n        t.id AS trace_id,\n        t.timestamp AS ts,\n        t.name AS kind,\n        ifNull(t.user_id, 'unknown') AS user,\n        ifNull(t.session_id, '') AS session_id,\n        trim(BOTH '\"' FROM t.metadata['hostname']) AS host\n    FROM default.traces AS t FINAL\n    WHERE t.project_id = '${project_id}'\n      AND has(t.tags, 'holmes-mcp')\n      AND t.is_deleted = 0\n      AND $__timeFilter(t.timestamp)\n      AND ('__all' IN (${user:singlequote}) OR ifNull(t.user_id, 'unknown') IN (${user:singlequote}))\n),\nroots AS (\n    SELECT\n        o.trace_id,\n        o.level,\n        ifNull(o.status_message, '') AS status_message,\n        if(o.end_time IS NULL, NULL, dateDiff('millisecond', o.start_time, o.end_time) / 1000) AS duration_s,\n        JSONExtractString(ifNull(o.input, ''), 'question') AS question\n    FROM default.observations AS o FINAL\n    WHERE o.project_id = '${project_id}'\n      AND upper(o.type) = 'AGENT'\n      AND o.is_deleted = 0\n      AND o.start_time >= $__fromTime - INTERVAL 1 DAY\n      AND o.trace_id IN (SELECT trace_id FROM calls)\n)\nSELECT multiIf(\n        r.level = 'ERROR', 'Error',\n        r.level = 'WARNING' AND r.status_message LIKE 'cancelled%', 'Cancelled',\n        r.level = 'WARNING', 'Cut off',\n        r.level = '', 'Unknown',\n        'Success') AS Outcome, count() AS Calls\nFROM calls AS c LEFT JOIN roots AS r ON r.trace_id = c.trace_id\nGROUP BY Outcome ORDER BY Calls DESC",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#898781"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Success"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#0ca30c"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Cut off"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#fab219"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Cancelled"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#898781"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Error"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#d03b3b"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Unknown"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#5c5c58"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "pieType": "donut",
+        "displayLabels": [
+          "percent"
+        ],
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "showLegend": true,
+          "values": [
+            "value",
+            "percent"
+          ]
+        },
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": true
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "type": "row",
+      "title": "People",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 15,
+        "w": 24,
+        "h": 1
+      },
+      "id": 101,
+      "panels": []
+    },
+    {
+      "type": "barchart",
+      "id": 9,
+      "title": "Top users",
+      "description": "Most active callers (investigations + follow-ups). 'unknown' = Claude Code configured without the identity headers. Click a bar to open that user in Langfuse.",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 16,
+        "w": 12,
+        "h": 10
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "${datasource}"
+          },
+          "editorType": "sql",
+          "format": 1,
+          "queryType": "table",
+          "rawSql": "WITH\ncalls AS (\n    SELECT\n        t.id AS trace_id,\n        t.timestamp AS ts,\n        t.name AS kind,\n        ifNull(t.user_id, 'unknown') AS user,\n        ifNull(t.session_id, '') AS session_id,\n        trim(BOTH '\"' FROM t.metadata['hostname']) AS host\n    FROM default.traces AS t FINAL\n    WHERE t.project_id = '${project_id}'\n      AND has(t.tags, 'holmes-mcp')\n      AND t.is_deleted = 0\n      AND $__timeFilter(t.timestamp)\n      AND ('__all' IN (${user:singlequote}) OR ifNull(t.user_id, 'unknown') IN (${user:singlequote}))\n)\nSELECT user AS User, count() AS Calls\nFROM calls GROUP BY User ORDER BY Calls DESC LIMIT 10",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "decimals": 0,
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#3987e5"
+          },
+          "custom": {
+            "fillOpacity": 85,
+            "gradientMode": "none",
+            "lineWidth": 0,
+            "axisPlacement": "auto",
+            "axisBorderShow": false,
+            "axisGridShow": false,
+            "axisLabel": ""
+          },
+          "links": [
+            {
+              "title": "Open this user in Langfuse",
+              "url": "${langfuse_url}/project/${project_id}/users/${__data.fields.User}",
+              "targetBlank": true
+            }
+          ]
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "xField": "User",
+        "showValue": "always",
+        "xTickLabelMaxLength": 40,
+        "xTickLabelRotation": 0,
+        "xTickLabelSpacing": 0,
+        "stacking": "none",
+        "groupWidth": 0.75,
+        "barWidth": 0.85,
+        "barRadius": 0,
+        "fullHighlight": false,
+        "colorByField": "Calls",
+        "legend": {
+          "showLegend": false,
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "id": 10,
+      "title": "Active users per day",
+      "description": "Distinct identified users per day.",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 16,
+        "w": 12,
+        "h": 10
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "${datasource}"
+          },
+          "editorType": "sql",
+          "format": 0,
+          "queryType": "timeseries",
+          "rawSql": "WITH\ncalls AS (\n    SELECT\n        t.id AS trace_id,\n        t.timestamp AS ts,\n        t.name AS kind,\n        ifNull(t.user_id, 'unknown') AS user,\n        ifNull(t.session_id, '') AS session_id,\n        trim(BOTH '\"' FROM t.metadata['hostname']) AS host\n    FROM default.traces AS t FINAL\n    WHERE t.project_id = '${project_id}'\n      AND has(t.tags, 'holmes-mcp')\n      AND t.is_deleted = 0\n      AND $__timeFilter(t.timestamp)\n      AND ('__all' IN (${user:singlequote}) OR ifNull(t.user_id, 'unknown') IN (${user:singlequote}))\n)\nSELECT toStartOfDay(ts) AS time, uniqExactIf(user, user != 'unknown') AS \"Active users\"\nFROM calls GROUP BY time ORDER BY time",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "decimals": 0,
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#3987e5"
+          },
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 85,
+            "lineWidth": 0,
+            "gradientMode": "none",
+            "axisBorderShow": false,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": false,
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "type": "row",
+      "title": "HolmesGPT",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 26,
+        "w": 24,
+        "h": 1
+      },
+      "id": 102,
+      "panels": []
+    },
+    {
+      "type": "barchart",
+      "id": 11,
+      "title": "Most used HolmesGPT tools",
+      "description": "Which tools HolmesGPT ran while answering, across all calls.",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 27,
+        "w": 12,
+        "h": 10
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "${datasource}"
+          },
+          "editorType": "sql",
+          "format": 1,
+          "queryType": "table",
+          "rawSql": "WITH\ncalls AS (\n    SELECT\n        t.id AS trace_id,\n        t.timestamp AS ts,\n        t.name AS kind,\n        ifNull(t.user_id, 'unknown') AS user,\n        ifNull(t.session_id, '') AS session_id,\n        trim(BOTH '\"' FROM t.metadata['hostname']) AS host\n    FROM default.traces AS t FINAL\n    WHERE t.project_id = '${project_id}'\n      AND has(t.tags, 'holmes-mcp')\n      AND t.is_deleted = 0\n      AND $__timeFilter(t.timestamp)\n      AND ('__all' IN (${user:singlequote}) OR ifNull(t.user_id, 'unknown') IN (${user:singlequote}))\n),\ntools AS (\n    SELECT o.trace_id, o.name AS tool, o.level\n    FROM default.observations AS o FINAL\n    WHERE o.project_id = '${project_id}'\n      AND upper(o.type) = 'TOOL'\n      AND o.is_deleted = 0\n      AND o.start_time >= $__fromTime - INTERVAL 1 DAY\n      AND o.trace_id IN (SELECT trace_id FROM calls)\n)\nSELECT tool AS Tool, count() AS Runs\nFROM tools GROUP BY Tool ORDER BY Runs DESC LIMIT 10",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "decimals": 0,
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#3987e5"
+          },
+          "custom": {
+            "fillOpacity": 85,
+            "gradientMode": "none",
+            "lineWidth": 0,
+            "axisPlacement": "auto",
+            "axisBorderShow": false,
+            "axisGridShow": false,
+            "axisLabel": ""
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "xField": "Tool",
+        "showValue": "always",
+        "xTickLabelMaxLength": 40,
+        "xTickLabelRotation": 0,
+        "xTickLabelSpacing": 0,
+        "stacking": "none",
+        "groupWidth": 0.75,
+        "barWidth": 0.85,
+        "barRadius": 0,
+        "fullHighlight": false,
+        "colorByField": "Runs",
+        "legend": {
+          "showLegend": false,
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "id": 12,
+      "title": "Answer time",
+      "description": "How long HolmesGPT took to answer successful calls: median and 90th percentile.",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 27,
+        "w": 12,
+        "h": 10
+      },
+      "maxDataPoints": 30,
+      "interval": "1h",
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "${datasource}"
+          },
+          "editorType": "sql",
+          "format": 0,
+          "queryType": "timeseries",
+          "rawSql": "WITH\ncalls AS (\n    SELECT\n        t.id AS trace_id,\n        t.timestamp AS ts,\n        t.name AS kind,\n        ifNull(t.user_id, 'unknown') AS user,\n        ifNull(t.session_id, '') AS session_id,\n        trim(BOTH '\"' FROM t.metadata['hostname']) AS host\n    FROM default.traces AS t FINAL\n    WHERE t.project_id = '${project_id}'\n      AND has(t.tags, 'holmes-mcp')\n      AND t.is_deleted = 0\n      AND $__timeFilter(t.timestamp)\n      AND ('__all' IN (${user:singlequote}) OR ifNull(t.user_id, 'unknown') IN (${user:singlequote}))\n),\nroots AS (\n    SELECT\n        o.trace_id,\n        o.level,\n        ifNull(o.status_message, '') AS status_message,\n        if(o.end_time IS NULL, NULL, dateDiff('millisecond', o.start_time, o.end_time) / 1000) AS duration_s,\n        JSONExtractString(ifNull(o.input, ''), 'question') AS question\n    FROM default.observations AS o FINAL\n    WHERE o.project_id = '${project_id}'\n      AND upper(o.type) = 'AGENT'\n      AND o.is_deleted = 0\n      AND o.start_time >= $__fromTime - INTERVAL 1 DAY\n      AND o.trace_id IN (SELECT trace_id FROM calls)\n)\nSELECT $__timeInterval(c.ts) AS time,\n       quantileExact(0.5)(r.duration_s) / 60 AS Median,\n       quantileExact(0.9)(r.duration_s) / 60 AS p90\nFROM calls AS c INNER JOIN roots AS r ON r.trace_id = c.trace_id\nWHERE r.level NOT IN ('ERROR', 'WARNING', '')\nGROUP BY time ORDER BY time",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "m",
+          "min": 0,
+          "decimals": 1,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "lineInterpolation": "linear",
+            "showPoints": "auto",
+            "pointSize": 6,
+            "spanNulls": true,
+            "gradientMode": "none",
+            "axisBorderShow": false
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Median"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#3987e5"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "p90"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#d95926"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "mean"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "row",
+      "title": "Activity",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 37,
+        "w": 24,
+        "h": 1
+      },
+      "id": 103,
+      "panels": []
+    },
+    {
+      "type": "table",
+      "id": 13,
+      "title": "Who used it, when",
+      "description": "Every question and follow-up, newest first. Session opens the whole conversation in Langfuse; Trace opens that single call with HolmesGPT's tool calls.",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 38,
+        "w": 24,
+        "h": 14
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "${datasource}"
+          },
+          "editorType": "sql",
+          "format": 1,
+          "queryType": "table",
+          "rawSql": "WITH\ncalls AS (\n    SELECT\n        t.id AS trace_id,\n        t.timestamp AS ts,\n        t.name AS kind,\n        ifNull(t.user_id, 'unknown') AS user,\n        ifNull(t.session_id, '') AS session_id,\n        trim(BOTH '\"' FROM t.metadata['hostname']) AS host\n    FROM default.traces AS t FINAL\n    WHERE t.project_id = '${project_id}'\n      AND has(t.tags, 'holmes-mcp')\n      AND t.is_deleted = 0\n      AND $__timeFilter(t.timestamp)\n      AND ('__all' IN (${user:singlequote}) OR ifNull(t.user_id, 'unknown') IN (${user:singlequote}))\n),\nroots AS (\n    SELECT\n        o.trace_id,\n        o.level,\n        ifNull(o.status_message, '') AS status_message,\n        if(o.end_time IS NULL, NULL, dateDiff('millisecond', o.start_time, o.end_time) / 1000) AS duration_s,\n        JSONExtractString(ifNull(o.input, ''), 'question') AS question\n    FROM default.observations AS o FINAL\n    WHERE o.project_id = '${project_id}'\n      AND upper(o.type) = 'AGENT'\n      AND o.is_deleted = 0\n      AND o.start_time >= $__fromTime - INTERVAL 1 DAY\n      AND o.trace_id IN (SELECT trace_id FROM calls)\n),\ntools AS (\n    SELECT o.trace_id, o.name AS tool, o.level\n    FROM default.observations AS o FINAL\n    WHERE o.project_id = '${project_id}'\n      AND upper(o.type) = 'TOOL'\n      AND o.is_deleted = 0\n      AND o.start_time >= $__fromTime - INTERVAL 1 DAY\n      AND o.trace_id IN (SELECT trace_id FROM calls)\n)\nSELECT\n    c.ts AS Time,\n    c.user AS User,\n    c.host AS Host,\n    if(c.kind = 'ask_holmes', 'Investigation', 'Follow-up') AS Type,\n    if(lengthUTF8(r.question) > 110, concat(leftUTF8(r.question, 110), '…'), r.question) AS Question,\n    multiIf(\n        r.level = 'ERROR', 'Error',\n        r.level = 'WARNING' AND r.status_message LIKE 'cancelled%', 'Cancelled',\n        r.level = 'WARNING', 'Cut off',\n        r.level = '', 'Unknown',\n        'Success') AS Outcome,\n    r.duration_s AS \"Answer time\",\n    ifNull(tc.tool_calls, 0) AS Tools,\n    c.session_id AS Session,\n    'Open trace ↗' AS Trace,\n    c.trace_id AS trace_id\nFROM calls AS c\nLEFT JOIN roots AS r ON r.trace_id = c.trace_id\nLEFT JOIN (SELECT trace_id, count() AS tool_calls FROM tools GROUP BY trace_id) AS tc\n       ON tc.trace_id = c.trace_id\nORDER BY Time DESC\nLIMIT 500",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": true,
+            "filterable": true
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Time"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 170
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "User"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 180
+              },
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Open this user in Langfuse",
+                    "url": "${langfuse_url}/project/${project_id}/users/${__value.raw}",
+                    "targetBlank": true
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Host"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 130
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Type"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 115
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Outcome"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 105
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "Success": {
+                        "color": "#0ca30c",
+                        "index": 0
+                      },
+                      "Cut off": {
+                        "color": "#fab219",
+                        "index": 1
+                      },
+                      "Cancelled": {
+                        "color": "#898781",
+                        "index": 2
+                      },
+                      "Error": {
+                        "color": "#d03b3b",
+                        "index": 3
+                      },
+                      "Unknown": {
+                        "color": "#898781",
+                        "index": 4
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Answer time"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "s"
+              },
+              {
+                "id": "decimals",
+                "value": 1
+              },
+              {
+                "id": "custom.width",
+                "value": 110
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Tools"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 70
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Session"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 160
+              },
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Open the conversation in Langfuse",
+                    "url": "${langfuse_url}/project/${project_id}/sessions/${__value.raw}",
+                    "targetBlank": true
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Trace"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 115
+              },
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Open this call in Langfuse",
+                    "url": "${langfuse_url}/project/${project_id}/traces/${__data.fields.trace_id}",
+                    "targetBlank": true
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "trace_id"
+            },
+            "properties": [
+              {
+                "id": "custom.hidden",
+                "value": true
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false
+        },
+        "sortBy": [
+          {
+            "displayName": "Time",
+            "desc": true
+          }
+        ]
+      }
+    },
+    {
+      "type": "table",
+      "id": 14,
+      "title": "Users",
+      "description": "One row per person: activity, success rate and their latest conversation.",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 52,
+        "w": 24,
+        "h": 9
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "${datasource}"
+          },
+          "editorType": "sql",
+          "format": 1,
+          "queryType": "table",
+          "rawSql": "WITH\ncalls AS (\n    SELECT\n        t.id AS trace_id,\n        t.timestamp AS ts,\n        t.name AS kind,\n        ifNull(t.user_id, 'unknown') AS user,\n        ifNull(t.session_id, '') AS session_id,\n        trim(BOTH '\"' FROM t.metadata['hostname']) AS host\n    FROM default.traces AS t FINAL\n    WHERE t.project_id = '${project_id}'\n      AND has(t.tags, 'holmes-mcp')\n      AND t.is_deleted = 0\n      AND $__timeFilter(t.timestamp)\n      AND ('__all' IN (${user:singlequote}) OR ifNull(t.user_id, 'unknown') IN (${user:singlequote}))\n),\nroots AS (\n    SELECT\n        o.trace_id,\n        o.level,\n        ifNull(o.status_message, '') AS status_message,\n        if(o.end_time IS NULL, NULL, dateDiff('millisecond', o.start_time, o.end_time) / 1000) AS duration_s,\n        JSONExtractString(ifNull(o.input, ''), 'question') AS question\n    FROM default.observations AS o FINAL\n    WHERE o.project_id = '${project_id}'\n      AND upper(o.type) = 'AGENT'\n      AND o.is_deleted = 0\n      AND o.start_time >= $__fromTime - INTERVAL 1 DAY\n      AND o.trace_id IN (SELECT trace_id FROM calls)\n)\nSELECT\n    c.user AS User,\n    arrayStringConcat(groupUniqArrayIf(c.host, c.host != ''), ', ') AS Hosts,\n    countIf(c.kind = 'ask_holmes') AS Investigations,\n    countIf(c.kind = 'holmes_follow_up') AS \"Follow-ups\",\n    countIf(r.level NOT IN ('ERROR', 'WARNING', '')) / nullIf(countIf(r.level != ''), 0) AS \"Success rate\",\n    min(c.ts) AS \"First seen\",\n    max(c.ts) AS \"Last seen\",\n    argMax(c.session_id, c.ts) AS \"Latest conversation\"\nFROM calls AS c LEFT JOIN roots AS r ON r.trace_id = c.trace_id\nGROUP BY User\nORDER BY \"Last seen\" DESC",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "filterable": true
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "User"
+            },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Open this user in Langfuse",
+                    "url": "${langfuse_url}/project/${project_id}/users/${__value.raw}",
+                    "targetBlank": true
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Success rate"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "percentunit"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              },
+              {
+                "id": "min",
+                "value": 0
+              },
+              {
+                "id": "max",
+                "value": 1
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "thresholds"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "#d03b3b",
+                      "value": null
+                    },
+                    {
+                      "color": "#fab219",
+                      "value": 0.8
+                    },
+                    {
+                      "color": "#0ca30c",
+                      "value": 0.95
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Latest conversation"
+            },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Open the conversation in Langfuse",
+                    "url": "${langfuse_url}/project/${project_id}/sessions/${__value.raw}",
+                    "targetBlank": true
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false
+        }
+      }
+    },
+    {
+      "type": "table",
+      "id": 15,
+      "title": "Problems",
+      "description": "Calls that did not end with a complete answer, newest first.",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 61,
+        "w": 24,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "${datasource}"
+          },
+          "editorType": "sql",
+          "format": 1,
+          "queryType": "table",
+          "rawSql": "WITH\ncalls AS (\n    SELECT\n        t.id AS trace_id,\n        t.timestamp AS ts,\n        t.name AS kind,\n        ifNull(t.user_id, 'unknown') AS user,\n        ifNull(t.session_id, '') AS session_id,\n        trim(BOTH '\"' FROM t.metadata['hostname']) AS host\n    FROM default.traces AS t FINAL\n    WHERE t.project_id = '${project_id}'\n      AND has(t.tags, 'holmes-mcp')\n      AND t.is_deleted = 0\n      AND $__timeFilter(t.timestamp)\n      AND ('__all' IN (${user:singlequote}) OR ifNull(t.user_id, 'unknown') IN (${user:singlequote}))\n),\nroots AS (\n    SELECT\n        o.trace_id,\n        o.level,\n        ifNull(o.status_message, '') AS status_message,\n        if(o.end_time IS NULL, NULL, dateDiff('millisecond', o.start_time, o.end_time) / 1000) AS duration_s,\n        JSONExtractString(ifNull(o.input, ''), 'question') AS question\n    FROM default.observations AS o FINAL\n    WHERE o.project_id = '${project_id}'\n      AND upper(o.type) = 'AGENT'\n      AND o.is_deleted = 0\n      AND o.start_time >= $__fromTime - INTERVAL 1 DAY\n      AND o.trace_id IN (SELECT trace_id FROM calls)\n)\nSELECT\n    c.ts AS Time,\n    c.user AS User,\n    if(c.kind = 'ask_holmes', 'Investigation', 'Follow-up') AS Type,\n    multiIf(\n        r.level = 'ERROR', 'Error',\n        r.level = 'WARNING' AND r.status_message LIKE 'cancelled%', 'Cancelled',\n        r.level = 'WARNING', 'Cut off',\n        r.level = '', 'Unknown',\n        'Success') AS Outcome,\n    r.status_message AS Reason,\n    if(lengthUTF8(r.question) > 100, concat(leftUTF8(r.question, 100), '…'), r.question) AS Question,\n    'Open trace ↗' AS Trace,\n    c.trace_id AS trace_id\nFROM calls AS c LEFT JOIN roots AS r ON r.trace_id = c.trace_id\nWHERE NOT (r.level NOT IN ('ERROR', 'WARNING', ''))\nORDER BY Time DESC\nLIMIT 100",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "filterable": true
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Time"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 170
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "User"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 180
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Type"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 115
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Outcome"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 105
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "Success": {
+                        "color": "#0ca30c",
+                        "index": 0
+                      },
+                      "Cut off": {
+                        "color": "#fab219",
+                        "index": 1
+                      },
+                      "Cancelled": {
+                        "color": "#898781",
+                        "index": 2
+                      },
+                      "Error": {
+                        "color": "#d03b3b",
+                        "index": 3
+                      },
+                      "Unknown": {
+                        "color": "#898781",
+                        "index": 4
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Trace"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 115
+              },
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Open this call in Langfuse",
+                    "url": "${langfuse_url}/project/${project_id}/traces/${__data.fields.trace_id}",
+                    "targetBlank": true
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "trace_id"
+            },
+            "properties": [
+              {
+                "id": "custom.hidden",
+                "value": true
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false
+        }
+      }
+    }
+  ]
+}
