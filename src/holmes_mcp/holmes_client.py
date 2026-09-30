@@ -18,6 +18,7 @@ import httpx
 
 from holmes_mcp import text
 from holmes_mcp.config import Settings
+from holmes_mcp.tracing import ToolObserver
 
 logger = logging.getLogger(__name__)
 
@@ -206,6 +207,7 @@ class HolmesClient:
         conversation_history: list | None = None,
         user_id: str | None = None,
         on_progress: ProgressCallback | None = None,
+        observer: ToolObserver | None = None,
     ) -> HolmesResult:
         state = _StreamState()
         result = state.result
@@ -224,6 +226,7 @@ class HolmesClient:
                     conversation_history=conversation_history,
                     user_id=user_id,
                     on_progress=on_progress,
+                    observer=observer or ToolObserver(),
                 )
         except TimeoutError:
             result.error = (
@@ -277,6 +280,7 @@ class HolmesClient:
         conversation_history: list | None,
         user_id: str | None,
         on_progress: ProgressCallback | None,
+        observer: ToolObserver,
     ) -> None:
         url = f"{self.settings.HOLMESGPT_URL.rstrip('/')}/api/chat"
         payload = self._build_payload(ask, conversation_history, metadata, user_id)
@@ -330,7 +334,7 @@ class HolmesClient:
                         continue
 
                     if await self._handle_event(
-                        state, current_event, event_data, on_progress
+                        state, current_event, event_data, on_progress, observer
                     ):
                         break
 
@@ -342,6 +346,7 @@ class HolmesClient:
         event: str | None,
         event_data: dict,
         on_progress: ProgressCallback | None,
+        observer: ToolObserver,
     ) -> bool:
         """Apply one SSE event to `state`. Returns True on a terminal event."""
         result = state.result
@@ -380,6 +385,7 @@ class HolmesClient:
                 state.pending_tool_names[tool_call_id] = tool_name
             state.last_tool = tool_name or state.last_tool
             state.tools_started += 1
+            observer.tool_started(tool_call_id, tool_name)
 
             # Still investigating: everything buffered so far is narration
             # leading up to this call, not the answer.
@@ -396,6 +402,7 @@ class HolmesClient:
                 _extract_tool_call(event_data)
             )
             tool_name = tool_name or state.pending_tool_names.pop(tool_call_id, "")
+            observer.tool_finished(tool_call_id, tool_name, params, status, result_text)
             result.tools_used.append(
                 ToolCall(
                     name=tool_name or "unknown",

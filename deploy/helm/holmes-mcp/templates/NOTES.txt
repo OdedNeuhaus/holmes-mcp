@@ -11,7 +11,9 @@ Claude Code users connect with:
 
   claude mcp add --transport http --scope user holmesgpt \
     {{ $scheme }}://{{ .Values.ingress.host }}/mcp \
-    --header "X-User-Email: you@example.com"
+    --header "X-User-Email: $(git config user.email)" \
+    --header "X-Username: $(whoami)" \
+    --header "X-Hostname: $(hostname)"
 
 Check it:
 
@@ -23,6 +25,15 @@ Ingress is disabled. To try it locally:
 
   kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "holmes-mcp.fullname" . }} 8000:{{ .Values.service.port }}
   claude mcp add --transport http holmesgpt http://localhost:8000/mcp
+{{- end }}
+
+{{- if and .Values.redis.enabled .Values.redis.nodePort.enabled }}
+
+Redis is also exposed as a NodePort service. Connect from outside the cluster:
+
+  kubectl -n {{ .Release.Namespace }} get svc {{ printf "%s-nodeport" (include "holmes-mcp.redis.fullname" .) | trunc 63 | trimSuffix "-" }}   # the port after 6379:
+  kubectl -n {{ .Release.Namespace }} get secret {{ include "holmes-mcp.redis.secretName" . }} -o jsonpath='{.data.password}' | base64 -d
+  redis-cli -h <node-ip> -p <node-port> -a <password>
 {{- end }}
 
 Long investigations need no client settings: Claude Code moves calls longer

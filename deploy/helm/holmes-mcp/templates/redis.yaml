@@ -113,4 +113,27 @@ spec:
     - name: redis
       port: 6379
       targetPort: redis
+{{- if .Values.redis.nodePort.enabled }}
+---
+# Reaches the bundled Redis from outside the cluster on every node's IP.
+# holmes-mcp itself keeps using the ClusterIP service above.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ printf "%s-nodeport" (include "holmes-mcp.redis.fullname" .) | trunc 63 | trimSuffix "-" }}
+  labels:
+    {{- include "holmes-mcp.labels" . | nindent 4 }}
+    {{- include "holmes-mcp.redis.selectorLabels" . | nindent 4 }}
+spec:
+  type: NodePort
+  selector:
+    {{- include "holmes-mcp.redis.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: redis
+      port: 6379
+      targetPort: redis
+      {{- with .Values.redis.nodePort.port }}
+      nodePort: {{ . }}
+      {{- end }}
+{{- end }}
 {{- end }}

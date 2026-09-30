@@ -39,4 +39,8 @@ def settings() -> Settings:
         STALL_TIMEOUT_SECONDS=5,
         TOTAL_TIMEOUT_SECONDS=30,
         REDIS_URL=None,
+        # Never trace to a real Langfuse from tests, whatever the shell has.
+        LANGFUSE_HOST=None,
+        LANGFUSE_PUBLIC_KEY=None,
+        LANGFUSE_SECRET_KEY=None,
     )

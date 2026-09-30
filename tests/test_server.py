@@ -62,15 +62,15 @@ async def call(server, tool: str, args: dict):
         return await client.call_tool(tool, args)
 
 
-async def test_lists_tools_and_prompt(settings, memory_store):
+async def test_lists_tools_and_no_prompts(settings, memory_store):
     server = create_server(settings, FakeHolmes(), memory_store)
     async with Client(server) as client:
         tools = {t.name: t for t in (await client.list_tools()).tools}
-        prompts = [p.name for p in (await client.list_prompts()).prompts]
+        prompts = (await client.list_prompts()).prompts
 
     assert set(tools) == {"ask_holmes", "holmes_follow_up"}
     assert tools["ask_holmes"].annotations.read_only_hint is True
-    assert prompts == ["investigate"]
+    assert prompts == []
 
 
 async def test_ask_then_follow_up(settings, memory_store):
@@ -226,16 +226,6 @@ async def test_caller_header_is_used_for_attribution(settings, memory_store):
 
     assert holmes.calls[0]["user_id"] is None
     assert "trace_user_id" not in holmes.calls[0]["metadata"]
-
-
-async def test_investigate_prompt(settings, memory_store):
-    server = create_server(settings, FakeHolmes(), memory_store)
-    async with Client(server) as client:
-        prompt = await client.get_prompt("investigate", {"issue": "api 500s"})
-
-    content = prompt.messages[0].content.text
-    assert "api 500s" in content
-    assert "ask_holmes" in content
 
 
 def test_format_result_truncates_answer_but_keeps_footer():

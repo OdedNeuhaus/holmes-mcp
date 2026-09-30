@@ -11,15 +11,17 @@ Add the server once. It will then be available in every project:
 ```bash
 claude mcp add --transport http --scope user holmesgpt \
   https://holmes-mcp.internal.example.com/mcp \
-  --header "X-User-Email: you@example.com"
+  --header "X-User-Email: $(git config user.email)" \
+  --header "X-Username: $(whoami)" \
+  --header "X-Hostname: $(hostname)"
 ```
 
-The `X-User-Email` header is optional. It's used only to attribute traces in Langfuse.
+Copy the command as it is. Your shell fills in your email, username and hostname when you run it, so there's nothing to edit. The HolmesGPT team uses these to see who uses HolmesGPT. They label usage; they aren't a password.
 
-Then just ask Claude, or use the prompt:
+Then ask Claude in plain language, and it calls HolmesGPT when the question is about live systems:
 
 ```
-/mcp__holmesgpt__investigate payments-api returns 502s since this morning's deploy
+Ask HolmesGPT why payments-api has been returning 502s in staging since this morning's deploy.
 ```
 
 ### What Claude gets
@@ -64,6 +66,14 @@ Claude Code ──HTTP (MCP, streamable, stateless)──▶ holmes-mcp (N repli
 - **One follow-up at a time per conversation.** A lock in Redis (`holmes-mcp:conv:<id>:lock`) rejects a second follow-up while one is running, so parallel calls can't silently overwrite each other's history. The lock expires by itself after the total timeout plus 60s, in case a replica dies while holding it.
 - **Long calls stay alive.** Progress notifications every `HEARTBEAT_SECONDS` keep Claude Code's 5-minute idle timeout from firing. When a client cancels or disconnects, the HolmesGPT request is closed immediately and the cancellation is logged.
 - **Rollouts drain.** On SIGTERM the pod keeps serving for 10s (`preStop`), so the ingress stops routing to it first. It then finishes in-flight investigations before exiting. `terminationGracePeriodSeconds` is derived from `holmes.totalTimeoutSeconds`, and an idle pod still exits in seconds.
+- **Langfuse tracing (optional).** Every `ask_holmes` and `holmes_follow_up` call becomes a trace:
+  - **Input and output:** the question and context in, the answer out.
+  - **Child spans:** one per HolmesGPT tool, with its parameters and the start of its output.
+  - **Metadata:** status (`success`, `error`, `cut_off`, `incomplete` or `cancelled`), duration and tool-call count.
+  - **Session:** each HolmesGPT conversation is one Langfuse session, so a question and its follow-ups appear together.
+  - **User:** `X-User-Email`, or else `X-Username@X-Hostname`. The client IP (from `X-Forwarded-For`) and user agent go into the metadata.
+  - **Trace ID:** the same `trace_id` HolmesGPT receives, so if HolmesGPT's own LLM calls are ever sent to Langfuse, they nest inside these traces.
+  - **Sending:** traces are sent in the background, in batches. Only the server's own spans are exported, and buffered traces are flushed on shutdown. If Langfuse is down, answers are unaffected.
 - **Tool approval is disabled.** `enable_tool_approval` is never sent, so HolmesGPT works around approval-gated tools itself.
 - The HolmesGPT model is always `GENERIC_MODEL_NAME`.
 
@@ -91,6 +101,7 @@ The chart's [values.yaml](deploy/helm/holmes-mcp/values.yaml) is intentionally s
 | `conversationTtlSeconds` | `7200` | Follow-up window |
 | `ingress.*` | nginx, internal host | Host, class, TLS; annotations for long SSE calls |
 | `redis.enabled` | `true` | Bundled Redis with a generated password. Set to `false` with `redis.external.existingSecret` to use your own Redis |
+| `langfuse.enabled` / `host` / `existingSecret` / `environment` | off | Langfuse tracing. The secret holds `public-key` and `secret-key` |
 | `resources`, `nodeSelector`, `tolerations`, `extraEnv` | | The usual |
 
 After install, `helm` prints the exact `claude mcp add` command for developers.
@@ -115,13 +126,15 @@ The chart sets these for you. The full list is for running the image some other 
 | `MAX_RESPONSE_CHARS` | `60000` | Cap on the text returned to Claude |
 | `MAX_INPUT_CHARS` | `30000` | Largest question plus context accepted |
 | `HEARTBEAT_SECONDS` | `30` | Interval of "still investigating" progress updates. Keep it well under 5 minutes |
-| `USER_HEADER` | `X-User-Email` | Request header used for Langfuse attribution (not for authentication) |
+| `USER_HEADER` | `X-User-Email` | Header carrying the caller's email, for attribution (not authentication). `X-Username` and `X-Hostname` are read too |
+| `LANGFUSE_HOST` / `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` | unset | Langfuse (self-hosted ≥ 3.63.0). Tracing is on only when all three are set |
+| `LANGFUSE_ENVIRONMENT` | unset | Optional environment label in Langfuse, e.g. `production` |
 | `HOST` / `PORT` | `0.0.0.0` / `8000` | Listen address |
 | `LOG_LEVEL` | `INFO` | |
 
 Endpoints: `/mcp` (MCP), `/healthz` (liveness), `/readyz` (Redis check, for monitoring).
 
-**Security.** The server has no per-user authentication. Expose it only on an internal ingress. `X-User-Email` is supplied by the client, so treat it as a label, not an identity.
+**Security.** The server has no per-user authentication. Expose it only on an internal ingress. The identity headers are supplied by the client, so treat them as labels, not as verified identities. The client IP in the trace metadata is the one value a developer can't easily set. Questions, context and answers are stored in Langfuse when tracing is on, including anything sensitive developers paste in, so restrict access to that Langfuse project accordingly.
 
 ## Development
 

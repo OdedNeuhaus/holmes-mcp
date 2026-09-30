@@ -95,6 +95,19 @@ class Settings(BaseSettings):
             "Langfuse attribution, never for access control."
         ),
     )
+    LANGFUSE_HOST: str | None = Field(
+        default=None,
+        description=(
+            "Langfuse base URL, e.g. https://langfuse.internal.example.com. "
+            "Tracing is on only when this and both keys are set."
+        ),
+    )
+    LANGFUSE_PUBLIC_KEY: str | None = None
+    LANGFUSE_SECRET_KEY: str | None = None
+    LANGFUSE_ENVIRONMENT: str | None = Field(
+        default=None,
+        description="Optional Langfuse environment label, e.g. production.",
+    )
     HOST: str = "0.0.0.0"
     PORT: int = 8000
     LOG_LEVEL: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"

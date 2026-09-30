@@ -1,9 +1,11 @@
 """HolmesGPT MCP server: lets Claude Code ask HolmesGPT questions."""
 
+import asyncio
 import json
 import logging
 import time
 import uuid
+from dataclasses import dataclass
 from typing import Annotated
 
 import uvicorn
@@ -26,6 +28,7 @@ from holmes_mcp.conversations import (
     shrink_history,
 )
 from holmes_mcp.holmes_client import HolmesClient, HolmesResult, ToolCall
+from holmes_mcp.tracing import TraceInfo, Tracer, create_tracer
 
 logger = logging.getLogger(__name__)
 
@@ -82,6 +85,61 @@ def _clean_user_id(value: str | None) -> str | None:
         return None
     cleaned = value.encode("ascii", "ignore").decode("ascii").strip()
     return cleaned[:199] or None
+
+
+# Self-reported identity headers, set once by each developer with
+# `claude mcp add ... --header "X-Username: $(whoami)" ...`. They label usage;
+# they are not authentication.
+USERNAME_HEADER = "X-Username"
+HOSTNAME_HEADER = "X-Hostname"
+
+
+@dataclass
+class Caller:
+    """Who is calling, as far as the request tells us."""
+
+    email: str | None = None
+    username: str | None = None
+    hostname: str | None = None
+    client_ip: str | None = None
+    user_agent: str | None = None
+
+    @property
+    def user_id(self) -> str | None:
+        """The label used for attribution: email, else username@hostname."""
+        if self.email:
+            return self.email
+        if self.username and self.hostname:
+            return f"{self.username}@{self.hostname}"
+        return self.username
+
+    def trace_metadata(self) -> dict[str, str]:
+        return {
+            key: value
+            for key, value in {
+                "email": self.email,
+                "username": self.username,
+                "hostname": self.hostname,
+                "client_ip": self.client_ip,
+                "user_agent": self.user_agent,
+            }.items()
+            if value
+        }
+
+
+def _caller_from_request(request, email_header: str) -> Caller:
+    headers = getattr(request, "headers", None) or {}
+    forwarded = (headers.get("x-forwarded-for") or "").split(",")[0].strip()
+    client = getattr(request, "client", None)
+    return Caller(
+        email=_clean_user_id(headers.get(email_header)),
+        username=_clean_user_id(headers.get(USERNAME_HEADER)),
+        hostname=_clean_user_id(headers.get(HOSTNAME_HEADER)),
+        client_ip=forwarded
+        or headers.get("x-real-ip")
+        or (getattr(client, "host", None) if client else None),
+        user_agent=_clean_user_id(headers.get("user-agent")),
+    )
 
 
 def _build_metadata(conversation_id: str, user_id: str | None, turn: int) -> dict:
@@ -222,6 +280,7 @@ def create_server(
     settings: Settings | None = None,
     client: HolmesClient | None = None,
     store: ConversationStore | None = None,
+    tracer: Tracer | None = None,
 ) -> MCPServer:
     # Explicit None checks: an empty MemoryConversationStore has len() == 0
     # and would be falsy.
@@ -231,6 +290,8 @@ def create_server(
         client = HolmesClient(settings)
     if store is None:
         store = create_store(settings)
+    if tracer is None:
+        tracer = create_tracer(settings)
 
     mcp = MCPServer(
         SERVER_NAME,
@@ -239,17 +300,16 @@ def create_server(
         version=VERSION,
         log_level=settings.LOG_LEVEL,
     )
-    # Exposed for tests and the health routes.
+    # Exposed for tests, the health routes and shutdown.
     mcp.conversation_store = store  # type: ignore[attr-defined]
+    mcp.tracer = tracer  # type: ignore[attr-defined]
 
-    def caller_id(ctx: Context) -> str | None:
+    def caller(ctx: Context) -> Caller:
         try:
-            headers = ctx.headers
+            request = ctx.request_context.request
         except ValueError:
-            return None
-        if not headers:
-            return None
-        return _clean_user_id(headers.get(settings.USER_HEADER))
+            return Caller()
+        return _caller_from_request(request, settings.USER_HEADER)
 
     def progress_reporter(ctx: Context):
         count = 0
@@ -300,8 +360,12 @@ def create_server(
         try:
             return await store.acquire_lock(conversation_id, ttl)
         except ConversationBusy as busy:
+            # max(): the lock's start time is stored rounded to milliseconds,
+            # so it can sit a hair after "now".
             running = (
-                f" (started {time.time() - busy.since:.0f}s ago)" if busy.since else ""
+                f" (started {max(0.0, time.time() - busy.since):.0f}s ago)"
+                if busy.since
+                else ""
             )
             raise ToolError(
                 f"A follow-up on conversation {conversation_id} is already "
@@ -335,28 +399,73 @@ def create_server(
 
     async def run(
         ctx: Context,
+        tool: str,
         conversation_id: str,
         ask: str,
+        trace_input: dict,
         previous: Conversation | None,
     ) -> str:
-        user_id = caller_id(ctx) or (previous.user_id if previous else None)
+        who = caller(ctx)
+        user_id = who.user_id or (previous.user_id if previous else None)
         turn = previous.turns + 1 if previous else 1
+        metadata = _build_metadata(conversation_id, user_id, turn)
 
         logger.info(
-            "Asking HolmesGPT: conversation=%s turn=%d user=%s",
+            "Asking HolmesGPT: conversation=%s turn=%d user=%s ip=%s",
             conversation_id,
             turn,
             user_id or "-",
+            who.client_ip or "-",
         )
-        result = await client.ask(
-            ask,
+        info = TraceInfo(
+            name=tool,
+            trace_id=metadata["trace_id"],
             session_id=conversation_id,
-            metadata=_build_metadata(conversation_id, user_id, turn),
-            conversation_history=previous.history if previous else None,
-            user_id=user_id,
-            on_progress=progress_reporter(ctx),
+            user_id=user_id or "unknown",
+            turn=turn,
+            input=trace_input,
+            metadata=who.trace_metadata(),
         )
+        with tracer.trace(info) as trace:
+            result = await client.ask(
+                ask,
+                session_id=conversation_id,
+                metadata=metadata,
+                conversation_history=previous.history if previous else None,
+                user_id=user_id,
+                on_progress=progress_reporter(ctx),
+                observer=trace,
+            )
+            reply, saved = await finish(conversation_id, ask, previous, user_id, turn, result)
+            trace.finish(
+                status=(
+                    ("cut_off" if result.incomplete else "error")
+                    if result.error
+                    else ("incomplete" if result.incomplete else "success")
+                ),
+                output=result.answer or None,
+                error=result.error,
+                metadata={
+                    "conversation_id": conversation_id,
+                    "duration_s": round(result.duration_s, 1),
+                    "tool_calls": len(result.tools_used),
+                    "saved": saved,
+                },
+            )
+        if isinstance(reply, ToolError):
+            raise reply
+        return reply
 
+    async def finish(
+        conversation_id: str,
+        ask: str,
+        previous: Conversation | None,
+        user_id: str | None,
+        turn: int,
+        result: HolmesResult,
+    ) -> tuple[str | ToolError, bool]:
+        """Store the outcome and build the reply (an error is returned, not raised,
+        so the trace can record it before it propagates)."""
         if result.error:
             logger.info(
                 "HolmesGPT failed: conversation=%s error=%s",
@@ -369,7 +478,7 @@ def create_server(
                 if previous
                 else ""
             )
-            raise ToolError(format_error(result, settings.MAX_RESPONSE_CHARS, note))
+            return ToolError(format_error(result, settings.MAX_RESPONSE_CHARS, note)), False
 
         history = _next_history(previous.history if previous else None, ask, result)
         if previous:
@@ -381,11 +490,14 @@ def create_server(
             conv = Conversation(id=conversation_id, history=history, user_id=user_id)
         saved = await save(conv)
 
-        return format_result(
-            result,
-            conversation_id if saved else None,
-            settings.MAX_RESPONSE_CHARS,
-            stale_conversation_id=conversation_id if previous and not saved else None,
+        return (
+            format_result(
+                result,
+                conversation_id if saved else None,
+                settings.MAX_RESPONSE_CHARS,
+                stale_conversation_id=conversation_id if previous and not saved else None,
+            ),
+            saved,
         )
 
     @mcp.tool(
@@ -426,8 +538,16 @@ def create_server(
         with holmes_follow_up.
         """
         question = validate_input(question, context)
+        trace_input = {"question": question}
+        if context and context.strip():
+            trace_input["context"] = context.strip()
         return await run(
-            ctx, new_conversation_id(), _compose_ask(question, context), None
+            ctx,
+            "ask_holmes",
+            new_conversation_id(),
+            _compose_ask(question, context),
+            trace_input,
+            None,
         )
 
     @mcp.tool(
@@ -473,33 +593,16 @@ def create_server(
             previous = await load(conversation_id)
             if previous is None:
                 raise unknown
-            return await run(ctx, conversation_id, question, previous)
+            return await run(
+                ctx,
+                "holmes_follow_up",
+                conversation_id,
+                question,
+                {"question": question},
+                previous,
+            )
         finally:
             await release(conversation_id, lock)
-
-    @mcp.prompt(
-        name="investigate",
-        title="Investigate with HolmesGPT",
-        description=(
-            "Gather local context about an issue, then have HolmesGPT "
-            "investigate it in the live environment."
-        ),
-    )
-    def investigate(issue: str) -> str:
-        return (
-            f"Investigate this issue with HolmesGPT: {issue}\n\n"
-            "1. First gather context from this workspace that HolmesGPT "
-            "cannot see: the service / deployment / namespace names involved "
-            "(check Kubernetes manifests, Helm charts, CI/CD config), the "
-            "exact error text, and relevant recent changes (git log / diff).\n"
-            "2. Call the ask_holmes tool with a focused question and that "
-            "context.\n"
-            "3. If the answer leaves open questions, use holmes_follow_up "
-            "rather than starting over.\n"
-            "4. Relate HolmesGPT's findings back to the code: point to the "
-            "files or config that likely explain them, and say which "
-            "conclusions are confirmed by evidence and which are guesses."
-        )
 
     @mcp.custom_route("/healthz", methods=["GET"], include_in_schema=False)
     async def healthz(request: Request) -> JSONResponse:
@@ -523,7 +626,36 @@ def create_app(settings: Settings | None = None):
     mcp = create_server(settings)
     # Stateless: no MCP session state lives on a replica, so any replica can
     # serve any request. Conversation state lives in the shared store.
-    return mcp.streamable_http_app(stateless_http=True, host=settings.HOST)
+    app = mcp.streamable_http_app(stateless_http=True, host=settings.HOST)
+    return _FlushTracesOnShutdown(app, mcp.tracer)
+
+
+class _FlushTracesOnShutdown:
+    """
+    ASGI wrapper that sends buffered traces during the app's shutdown.
+
+    It has to happen here: after a graceful SIGTERM shutdown uvicorn re-raises
+    the signal, which ends the process before code after `uvicorn.run()` runs.
+    """
+
+    def __init__(self, app, tracer: Tracer):
+        self.app = app
+        self.tracer = tracer
+
+    def __getattr__(self, name):
+        # Let callers (tests, TestClient) reach the wrapped Starlette app.
+        return getattr(self.app, name)
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "lifespan":
+            return await self.app(scope, receive, send)
+
+        async def send_wrapper(message):
+            if message["type"] == "lifespan.shutdown.complete":
+                await asyncio.to_thread(self.tracer.shutdown)
+            await send(message)
+
+        await self.app(scope, receive, send_wrapper)
 
 
 def main() -> None:

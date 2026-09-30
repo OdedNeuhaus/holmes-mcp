@@ -87,6 +87,24 @@ spec:
                   name: {{ .Values.redis.external.existingSecret }}
                   key: {{ .Values.redis.external.key }}
             {{- end }}
+            {{- if .Values.langfuse.enabled }}
+            - name: LANGFUSE_HOST
+              value: {{ required "langfuse.host is required when langfuse.enabled=true" .Values.langfuse.host | quote }}
+            - name: LANGFUSE_PUBLIC_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ required "langfuse.existingSecret is required when langfuse.enabled=true" .Values.langfuse.existingSecret }}
+                  key: public-key
+            - name: LANGFUSE_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.langfuse.existingSecret }}
+                  key: secret-key
+            {{- with .Values.langfuse.environment }}
+            - name: LANGFUSE_ENVIRONMENT
+              value: {{ . | quote }}
+            {{- end }}
+            {{- end }}
             {{- with .Values.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

@@ -5,7 +5,9 @@ image:
   repository: REGISTRY/holmes-mcp
   # Defaults to the chart appVersion.
   tag: ""
-  pullPolicy: IfNotPresent
+  # Always: every pod start checks the registry, so a rebuilt image pushed
+  # under the same tag is picked up on the next rollout.
+  pullPolicy: Always
 
 imagePullSecrets: []
 
@@ -71,11 +73,29 @@ redis:
       memory: 128Mi
     limits:
       memory: 1Gi
+  # Also expose the bundled Redis as a NodePort service, reachable on every
+  # node's IP (e.g. to inspect conversations with redis-cli). Redis still
+  # requires its password; anyone who can reach the nodes can try to connect.
+  nodePort:
+    enabled: true
+    # Fixed port within the cluster's NodePort range (default 30000-32767).
+    # Empty = Kubernetes picks one.
+    port: ""
   # Used when enabled: false. A secret whose key holds the full URL,
   # e.g. redis://:password@my-redis:6379/0
   external:
     existingSecret: ""
     key: redis-url
+
+# Send a trace of every question and follow-up to Langfuse (self-hosted
+# >= 3.63.0). Traces are grouped into one session per HolmesGPT conversation.
+langfuse:
+  enabled: false
+  host: ""  # e.g. https://langfuse.internal.example.com
+  # Secret with keys `public-key` and `secret-key` (a Langfuse project's API keys).
+  existingSecret: ""
+  # Optional environment label shown in Langfuse, e.g. production.
+  environment: ""
 
 # Extra environment variables for the holmes-mcp container.
 extraEnv: []
